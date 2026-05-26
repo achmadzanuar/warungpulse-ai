@@ -2,18 +2,27 @@
   "short_name": "WarungPulse",
   "name": "WarungPulse AI Co-Pilot",
   "id": "/",
-  "icons": [
-    {
-      "src": "/logo-512.png",
-      "type": "image/png",
-      "sizes": "512x512",
-      "purpose": "any maskable"
-    }
-  ],
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
+  "orientation": "portrait",
   "theme_color": "#f97316",
   "background_color": "#f8f9fa",
+
+  "icons": [
+    {
+      "src": "/logo-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/logo-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+
   "description": "Co-pilot AI untuk mencatat transaksi, stok, kasbon, dan laporan warung."
 }
