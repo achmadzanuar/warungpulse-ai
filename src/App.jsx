@@ -281,17 +281,23 @@ export default function App() {
           },
 
           async (decodedText) => {
-            try {
-              await scanner.stop();
-              await scanner.clear();
-            } catch (e) {
-              console.warn("Scanner Stop Error", e);
-            }
 
-            setIsScannerOpen(false);
+  setIsScannerOpen(false);
 
-            handleScannedBarcode(decodedText);
-          },
+  setTimeout(async () => {
+    try {
+      if (scanner) {
+        await scanner.stop();
+        await scanner.clear();
+      }
+    } catch (e) {
+      console.warn("Scanner Stop Error", e);
+    }
+
+    handleScannedBarcode(decodedText);
+
+  }, 200);
+},
 
           (errorMessage) => {
             // Optional debug
