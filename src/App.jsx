@@ -559,7 +559,7 @@ export default function App() {
         </head>
         <body>
           <table>
-            <tr><td colspan="8" class="title">LAPORAN HASIL PENJUALAN TOKO SEMBAKO</td></tr>
+            <tr><td colspan="8" class="title">LAPORAN HASIL PENJUALAN </td></tr>
             <tr><td colspan="8" class="subtitle">${escapeHtml(storeProfile.name)}</td></tr>
             <tr><td colspan="8" class="period">Periode: ${escapeHtml(periodLabel)}</td></tr>
             <tr class="head">
