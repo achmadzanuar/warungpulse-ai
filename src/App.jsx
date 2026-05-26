@@ -675,7 +675,7 @@ export default function App() {
           </div>
           <div className="bg-white/10 rounded-2xl p-3 border border-white/20 backdrop-blur-md flex justify-between items-center">
             <div>
-              <p className="text-orange-100 text-[10px] font-bold uppercase tracking-wider mb-0.5">Laba Bersih Sejati</p>
+              <p className="text-orange-100 text-[10px] font-bold uppercase tracking-wider mb-0.5">Laba Bersih </p>
               <p className="text-lg font-bold text-white">Rp {totalProfit.toLocaleString('id-ID')}</p>
             </div>
             <div className="bg-green-500 text-white text-[10px] font-bold px-2 py-1 rounded-lg uppercase tracking-wider shadow-sm">Profit</div>
