@@ -259,60 +259,65 @@ export default function App() {
   }, [inventory, openProductModal]);
 
   useEffect(() => {
-    let html5QrcodeScanner = null;
-    let isDisposed = false;
-    let initTimer = null;
+  let scanner = null;
+  let isDisposed = false;
+  let initTimer = null;
 
-    if (isScannerOpen) {
-  initTimer = setTimeout(async () => {
-    try {
-      const { Html5QrcodeScanner } = await import('html5-qrcode');
+  if (isScannerOpen) {
+    initTimer = setTimeout(async () => {
+      try {
+        const { Html5Qrcode } = await import("html5-qrcode");
 
-      if (isDisposed) return;
+        if (isDisposed) return;
 
-      html5QrcodeScanner = new Html5QrcodeScanner(
-        "reader",
-        {
-          fps: 10,
-          qrbox: { width: 250, height: 250 },
-          aspectRatio: 1,
-          rememberLastUsedCamera: true,
-          showTorchButtonIfSupported: true,
-          showZoomSliderIfSupported: true,
-        },
-        false
-      );
+        scanner = new Html5Qrcode("reader");
 
-      html5QrcodeScanner.render(
-        async (decodedText) => {
-          try {
-            await html5QrcodeScanner.clear();
-          } catch (e) {
-            console.warn("Clear Scanner Error", e);
+        await scanner.start(
+          { facingMode: "environment" },
+          {
+            fps: 10,
+            qrbox: { width: 250, height: 250 },
+            aspectRatio: 1,
+          },
+
+          async (decodedText) => {
+            try {
+              await scanner.stop();
+              await scanner.clear();
+            } catch (e) {
+              console.warn("Scanner Stop Error", e);
+            }
+
+            setIsScannerOpen(false);
+
+            handleScannedBarcode(decodedText);
+          },
+
+          (errorMessage) => {
+            // Optional debug
+            // console.log(errorMessage);
           }
+        );
 
-          setIsScannerOpen(false);
+      } catch (error) {
+        console.warn("Scanner Init Error", error);
+      }
+    }, 300);
+  }
 
-          handleScannedBarcode(decodedText);
-        },
+  return () => {
+    isDisposed = true;
 
-        (errorMessage) => {
-          // Optional: debug scanner
-          // console.log(errorMessage);
-        }
-      );
+    if (initTimer) clearTimeout(initTimer);
 
-    } catch (error) {
-      console.warn("Scanner Init Error", error);
+    if (scanner) {
+      scanner.stop()
+        .then(() => scanner.clear())
+        .catch(() => {});
     }
-  }, 300);
-}
-    return () => {
-      isDisposed = true;
-      if (initTimer) clearTimeout(initTimer);
-      if (html5QrcodeScanner) html5QrcodeScanner.clear().catch(() => {});
-    };
-  }, [isScannerOpen, handleScannedBarcode]);
+  };
+
+}, [isScannerOpen, handleScannedBarcode]);
 
   const handleLogoUpload = (e) => {
     const file = e.target.files[0];
@@ -1201,7 +1206,7 @@ export default function App() {
             <h3 className="text-white font-bold text-xl mb-2 flex items-center"><Camera className="mr-2" /> Scan Barcode</h3>
             <p className="text-gray-400 text-sm text-center mb-8">Arahkan kamera ke kemasan produk (Indomie, Sabun) untuk jualan cepat.</p>
             <div className="w-full aspect-square bg-black rounded-3xl overflow-hidden border-2 border-orange-500 relative mb-6">
-               <div id="reader" className="w-full h-full"></div>
+               <div id="reader" className="w-full min-h-[300px]"></div>
             </div>
             <div className="w-full flex space-x-2">
               <input type="text" value={manualBarcode} onChange={(e) => setManualBarcode(e.target.value)} placeholder="Atau ketik barcode manual..." className="flex-1 bg-white/10 border border-white/20 text-white px-4 py-3 rounded-xl focus:outline-none focus:border-orange-500 text-sm" />
