@@ -264,24 +264,49 @@ export default function App() {
     let initTimer = null;
 
     if (isScannerOpen) {
-      initTimer = setTimeout(async () => {
-        try {
-          const { Html5QrcodeScanner } = await import('html5-qrcode');
-          if (isDisposed) return;
+  initTimer = setTimeout(async () => {
+    try {
+      const { Html5QrcodeScanner } = await import('html5-qrcode');
 
-          html5QrcodeScanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: {width: 250, height: 250} }, false);
-          html5QrcodeScanner.render(
-            (decodedText) => {
-              html5QrcodeScanner.clear();
-              setIsScannerOpen(false);
-              handleScannedBarcode(decodedText);
-            },
-            () => {}
-          );
-        } catch(error) { console.warn("Scanner Init Error", error); }
-      }, 300);
+      if (isDisposed) return;
+
+      html5QrcodeScanner = new Html5QrcodeScanner(
+        "reader",
+        {
+          fps: 10,
+          qrbox: { width: 250, height: 250 },
+          aspectRatio: 1,
+          rememberLastUsedCamera: true,
+          showTorchButtonIfSupported: true,
+          showZoomSliderIfSupported: true,
+        },
+        false
+      );
+
+      html5QrcodeScanner.render(
+        async (decodedText) => {
+          try {
+            await html5QrcodeScanner.clear();
+          } catch (e) {
+            console.warn("Clear Scanner Error", e);
+          }
+
+          setIsScannerOpen(false);
+
+          handleScannedBarcode(decodedText);
+        },
+
+        (errorMessage) => {
+          // Optional: debug scanner
+          // console.log(errorMessage);
+        }
+      );
+
+    } catch (error) {
+      console.warn("Scanner Init Error", error);
     }
-
+  }, 300);
+}
     return () => {
       isDisposed = true;
       if (initTimer) clearTimeout(initTimer);
