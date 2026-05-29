@@ -6,7 +6,7 @@ import {
   CreditCard, Share2, FileText, Receipt,
   Settings, Download, Upload, Store, Search, Camera, Barcode, 
   Calendar, FileSpreadsheet, HelpCircle, ChevronDown, ChevronUp, Image as ImageIcon,
-  Mail, ShieldCheck
+  Mail, ShieldCheck, Minus
 } from 'lucide-react';
 import { 
   AreaChart, Area, XAxis, Tooltip, ResponsiveContainer, CartesianGrid, YAxis
@@ -56,6 +56,7 @@ export default function App() {
   const [inventory, setInventory] = useState(() => getLocalStorage('wp_inventory', INITIAL_INVENTORY));
   const [transactions, setTransactions] = useState(() => getLocalStorage('wp_transactions', []));
   const [piutang, setPiutang] = useState(() => getLocalStorage('wp_piutang', []));
+  const [cart, setCart] = useState([]);
   const [aiInsights, setAiInsights] = useState(() => getLocalStorage('wp_insights', ["Selamat datang di WarungPulse AI! Coba gunakan fitur Suara untuk mencatat transaksi pertama Anda."]));
   const [storeProfile, setStoreProfile] = useState(() => getLocalStorage('wp_store_profile', { name: 'WARUNGPULSE AI', phone: '', logo: '' }));
   const [geminiApiKey, setGeminiApiKey] = useState(() => getLocalStorage('wp_gemini_api_key', ''));
@@ -86,6 +87,7 @@ export default function App() {
 
   // Scanner States
   const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [scannerMode, setScannerMode] = useState('sale');
   const [manualBarcode, setManualBarcode] = useState('');
 
   // Product Form States
@@ -96,6 +98,8 @@ export default function App() {
 
   const recognitionRef = useRef(null);
   const fileInputRef = useRef(null);
+  const allowAppExitRef = useRef(false);
+  const navigationStateRef = useRef({});
 
   // Sync to LocalStorage
   useEffect(() => { window.localStorage.setItem('wp_inventory', JSON.stringify(inventory)); }, [inventory]);
@@ -108,6 +112,18 @@ export default function App() {
   useEffect(() => { window.localStorage.setItem('wp_onboarding_done', JSON.stringify(!showOnboarding)); }, [showOnboarding]);
   useEffect(() => { window.localStorage.setItem('wp_backup_reminder_interval', JSON.stringify(backupReminderInterval)); }, [backupReminderInterval]);
   useEffect(() => { window.localStorage.setItem('wp_last_backup_at', JSON.stringify(lastBackupAt)); }, [lastBackupAt]);
+
+  useEffect(() => {
+    navigationStateRef.current = {
+      activeTab,
+      confirmOpen: confirmDialog.isOpen,
+      isModalOpen,
+      isProductModalOpen,
+      isScannerOpen,
+      selectedReceipt,
+      showOnboarding,
+    };
+  }, [activeTab, confirmDialog.isOpen, isModalOpen, isProductModalOpen, isScannerOpen, selectedReceipt, showOnboarding]);
 
   useEffect(() => {
     const handleBeforeInstallPrompt = (event) => {
@@ -140,6 +156,77 @@ export default function App() {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
+  }, []);
+
+  useEffect(() => {
+    window.history.replaceState({ warungpulse: true }, '');
+    window.history.pushState({ warungpulse: true }, '');
+
+    const handleBackButton = () => {
+      if (allowAppExitRef.current) return;
+      const current = navigationStateRef.current;
+
+      if (current.confirmOpen) {
+        setConfirmDialog({ isOpen: false });
+        window.history.pushState({ warungpulse: true }, '');
+        return;
+      }
+
+      if (current.showOnboarding) {
+        setShowOnboarding(false);
+        window.history.pushState({ warungpulse: true }, '');
+        return;
+      }
+
+      if (current.isScannerOpen) {
+        setIsScannerOpen(false);
+        window.history.pushState({ warungpulse: true }, '');
+        return;
+      }
+
+      if (current.isModalOpen) {
+        recognitionRef.current?.stop();
+        setIsListening(false);
+        setIsModalOpen(false);
+        window.history.pushState({ warungpulse: true }, '');
+        return;
+      }
+
+      if (current.isProductModalOpen) {
+        setIsProductModalOpen(false);
+        window.history.pushState({ warungpulse: true }, '');
+        return;
+      }
+
+      if (current.selectedReceipt) {
+        setSelectedReceipt(null);
+        window.history.pushState({ warungpulse: true }, '');
+        return;
+      }
+
+      if (current.activeTab !== 'dashboard') {
+        setActiveTab('dashboard');
+        window.history.pushState({ warungpulse: true }, '');
+        return;
+      }
+
+      setConfirmDialog({
+        isOpen: true,
+        title: 'Keluar Aplikasi?',
+        message: 'Tekan Keluar jika ingin menutup WarungPulse. Tekan Batal untuk tetap di dashboard.',
+        cancelText: 'Batal',
+        actionText: 'Keluar',
+        action: () => {
+          allowAppExitRef.current = true;
+          setConfirmDialog({ isOpen: false });
+          window.history.back();
+        }
+      });
+      window.history.pushState({ warungpulse: true }, '');
+    };
+
+    window.addEventListener('popstate', handleBackButton);
+    return () => window.removeEventListener('popstate', handleBackButton);
   }, []);
 
   // Voice Recognition Init
@@ -197,6 +284,8 @@ export default function App() {
   const totalOmzet = filteredTransactions.filter(tx => tx.type !== 'pengeluaran').reduce((acc, curr) => acc + curr.total_transaction, 0);
   const totalProfit = filteredTransactions.reduce((acc, curr) => acc + (curr.total_profit || 0), 0);
   const totalKasbon = piutang.reduce((acc, curr) => acc + curr.total_transaction, 0);
+  const cartTotal = cart.reduce((sum, item) => sum + (item.harga * item.qty), 0);
+  const cartTotalQty = cart.reduce((sum, item) => sum + item.qty, 0);
   const backupReminderDays = backupReminderInterval === 'monthly' ? 30 : 7;
   const isBackupReminderOn = backupReminderInterval !== 'off';
   const lastBackupTime = lastBackupAt ? new Date(lastBackupAt).getTime() : 0;
@@ -214,52 +303,153 @@ export default function App() {
     setIsProductModalOpen(true);
   }, []);
 
+  const openScanner = useCallback((mode = 'sale') => {
+    setScannerMode(mode);
+    setManualBarcode('');
+    setIsScannerOpen(true);
+  }, []);
+
+  const addProductToCart = useCallback((product) => {
+    if (!product) return;
+
+    setCart(prevCart => {
+      const existingItem = prevCart.find(item => item.id === product.id);
+      const currentQty = existingItem?.qty || 0;
+
+      if (product.stock <= currentQty) {
+        setConfirmDialog({
+          isOpen: true,
+          title: 'Stok Tidak Cukup',
+          message: `${product.name} hanya tersedia ${product.stock}. Qty di keranjang sudah mencapai batas stok.`,
+          cancelText: 'Tutup',
+          action: null
+        });
+        return prevCart;
+      }
+
+      if (existingItem) {
+        return prevCart.map(item => item.id === product.id ? { ...item, qty: item.qty + 1 } : item);
+      }
+
+      return [
+        ...prevCart,
+        {
+          id: product.id,
+          barcode: product.barcode || '',
+          nama: product.name,
+          harga: product.price,
+          cost: product.cost || product.price,
+          stock: product.stock,
+          qty: 1
+        }
+      ];
+    });
+  }, []);
+
+  const updateCartQty = (productId, delta) => {
+    setCart(prevCart => prevCart.flatMap(item => {
+      if (item.id !== productId) return [item];
+      const nextQty = item.qty + delta;
+      if (nextQty <= 0) return [];
+      if (nextQty > item.stock) {
+        setConfirmDialog({
+          isOpen: true,
+          title: 'Stok Tidak Cukup',
+          message: `${item.nama} hanya tersedia ${item.stock}.`,
+          cancelText: 'Tutup',
+          action: null
+        });
+        return [item];
+      }
+      return [{ ...item, qty: nextQty }];
+    }));
+  };
+
+  const removeCartItem = (productId) => {
+    setCart(prevCart => prevCart.filter(item => item.id !== productId));
+  };
+
+  const checkoutCart = () => {
+    if (cart.length === 0) return;
+
+    const insufficientItems = cart
+      .map(cartItem => {
+        const stockItem = inventory.find(item => item.id === cartItem.id);
+        if (stockItem && stockItem.stock >= cartItem.qty) return null;
+        return `${cartItem.nama}: stok ${stockItem?.stock || 0}, diminta ${cartItem.qty}`;
+      })
+      .filter(Boolean);
+
+    if (insufficientItems.length > 0) {
+      setConfirmDialog({
+        isOpen: true,
+        title: 'Stok Tidak Cukup',
+        message: `Checkout dibatalkan. ${insufficientItems.join('; ')}.`,
+        cancelText: 'Tutup',
+        actionText: 'Cek Produk',
+        action: () => { setConfirmDialog({isOpen: false}); setActiveTab('inventory'); }
+      });
+      return;
+    }
+
+    const items = cart.map(item => ({
+      name: item.nama,
+      qty: item.qty,
+      price: item.harga,
+      cost: item.cost,
+      subtotal: item.harga * item.qty,
+      profit: (item.harga - item.cost) * item.qty
+    }));
+
+    const newTx = {
+      id: Date.now(),
+      time: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+      date: new Date().toLocaleDateString('id-ID'),
+      type: 'tunai',
+      customer_name: 'Pelanggan Walk-in',
+      notes: 'Checkout POS Barcode',
+      items,
+      total_transaction: items.reduce((sum, item) => sum + item.subtotal, 0),
+      total_profit: items.reduce((sum, item) => sum + item.profit, 0)
+    };
+
+    setTransactions(prev => [newTx, ...prev]);
+    setInventory(prevInv => prevInv.map(product => {
+      const cartItem = cart.find(item => item.id === product.id);
+      if (!cartItem) return product;
+      return { ...product, stock: Math.max(0, product.stock - cartItem.qty) };
+    }));
+    setCart([]);
+    setAiInsights(prev => [`Checkout ${items.length} produk berhasil dicatat.`, ...prev]);
+    setSelectedReceipt(newTx);
+  };
+
   const handleScannedBarcode = useCallback((scannedCode) => {
     const code = scannedCode.trim();
     if (!code) return;
 
+    if (scannerMode === 'product') {
+      setProductForm(prev => ({ ...prev, barcode: code }));
+      setIsProductModalOpen(true);
+      return;
+    }
+
     const item = inventory.find(i => i.barcode === code);
     
     if (item) {
-      if (item.stock < 1) {
-        setConfirmDialog({
-          isOpen: true,
-          title: 'Stok Tidak Cukup',
-          message: `${item.name} stoknya kosong. Restock dulu sebelum mencatat penjualan.`,
-          cancelText: 'Tutup',
-          actionText: 'Restock',
-          action: () => { setConfirmDialog({isOpen: false}); openProductModal(item); setActiveTab('inventory'); }
-        });
-        return;
-      }
-
-      setConfirmDialog({
-        isOpen: true, title: 'Barang Ditemukan', message: `Tambahkan penjualan 1x ${item.name} (Rp ${item.price.toLocaleString('id-ID')}) ke Omzet?`,
-        cancelText: 'Batal', actionText: 'Jual Sekarang',
-        action: () => {
-          const newTx = {
-            id: Date.now(), time: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }), date: new Date().toLocaleDateString('id-ID'),
-            type: 'tunai', customer_name: 'Walk-in', notes: 'Via Barcode Scanner',
-            items: [{ name: item.name, qty: 1, price: item.price, cost: item.cost, subtotal: item.price, profit: item.price - item.cost }],
-            total_transaction: item.price, total_profit: item.price - item.cost
-          };
-          setTransactions(prev => [newTx, ...prev]);
-          setInventory(prevInv => prevInv.map(inv => inv.id === item.id ? { ...inv, stock: Math.max(0, inv.stock - 1) } : inv));
-          setAiInsights(prev => [`Transaksi cepat ${item.name} berhasil dicatat via Barcode!`, ...prev]);
-          setConfirmDialog({isOpen: false});
-        }
-      });
+      addProductToCart(item);
     } else {
       setConfirmDialog({
-        isOpen: true, title: 'Barcode Baru', message: `Barcode [${code}] belum terdaftar. Ingin mendaftarkan produk ini sekarang?`,
-        cancelText: 'Batal', actionText: 'Tambah Produk',
+        isOpen: true, title: 'Produk Belum Terdaftar', message: `Barcode [${code}] belum ada di katalog produk.`,
+        cancelText: 'Tutup', actionText: 'Tambah Produk',
         action: () => { setConfirmDialog({isOpen: false}); openProductModal(null, code); setActiveTab('inventory'); }
       });
     }
-  }, [inventory, openProductModal]);
+  }, [addProductToCart, inventory, openProductModal, scannerMode]);
 
   useEffect(() => {
   let scanner = null;
+  let isScannerStarted = false;
   let isDisposed = false;
   let initTimer = null;
 
@@ -281,29 +471,24 @@ export default function App() {
           },
 
           async (decodedText) => {
+            setIsScannerOpen(false);
 
-  setIsScannerOpen(false);
+            setTimeout(async () => {
+              try {
+                if (scanner) {
+                  await scanner.stop();
+                  await scanner.clear();
+                }
+              } catch (error) {
+                console.warn("Scanner Stop Error", error);
+              }
 
-  setTimeout(async () => {
-    try {
-      if (scanner) {
-        await scanner.stop();
-        await scanner.clear();
-      }
-    } catch (e) {
-      console.warn("Scanner Stop Error", e);
-    }
-
-    handleScannedBarcode(decodedText);
-
-  }, 200);
-},
-
-          (errorMessage) => {
-            // Optional debug
-            // console.log(errorMessage);
-          }
+              handleScannedBarcode(decodedText);
+            }, 200);
+          },
+          () => {}
         );
+        isScannerStarted = true;
 
       } catch (error) {
         console.warn("Scanner Init Error", error);
@@ -317,9 +502,14 @@ export default function App() {
     if (initTimer) clearTimeout(initTimer);
 
     if (scanner) {
-      scanner.stop()
-        .then(() => scanner.clear())
-        .catch(() => {});
+      (async () => {
+        try {
+          if (isScannerStarted) await scanner.stop();
+          await scanner.clear();
+        } catch (error) {
+          console.warn("Scanner Cleanup Error", error);
+        }
+      })();
     }
   };
 
@@ -680,27 +870,6 @@ export default function App() {
           <p className="text-sm text-gray-500">Ringkasan bisnis Anda {reportFilter === 'hari_ini' ? 'hari ini' : 'saat ini'}.</p>
         </div>
 
-        {showOnboarding && (
-          <div className="bg-white border border-orange-100 rounded-2xl p-4 shadow-sm">
-            <div className="flex items-start justify-between gap-3 mb-3">
-              <div>
-                <h3 className="font-bold text-gray-900 text-sm">Mulai pakai WarungPulse</h3>
-                <p className="text-xs text-gray-500 mt-0.5">Cukup siapkan ini dulu agar catatan warung rapi.</p>
-              </div>
-              <button onClick={() => setShowOnboarding(false)} className="text-gray-400 hover:text-gray-600 p-1 -mt-1 -mr-1" title="Tutup panduan"><X size={16} /></button>
-            </div>
-            <div className="grid grid-cols-1 gap-2 text-xs text-gray-700">
-              <div className="flex items-center gap-2"><Package size={14} className="text-orange-500 shrink-0" /><span>Tambah produk dan harga jual.</span></div>
-              <div className="flex items-center gap-2"><Settings size={14} className="text-orange-500 shrink-0" /><span>Isi API Key Gemini di Pengaturan.</span></div>
-              <div className="flex items-center gap-2"><Mic size={14} className="text-orange-500 shrink-0" /><span>Tekan mikrofon untuk catat transaksi.</span></div>
-            </div>
-            <div className="flex gap-2 mt-4">
-              <button onClick={() => { setActiveTab('settings'); setShowOnboarding(false); }} className="flex-1 bg-orange-500 text-white font-bold py-2.5 rounded-xl text-xs">Atur Sekarang</button>
-              <button onClick={() => setShowOnboarding(false)} className="flex-1 bg-gray-100 text-gray-700 font-bold py-2.5 rounded-xl text-xs">Saya Mengerti</button>
-            </div>
-          </div>
-        )}
-
         <div className="bg-gradient-to-br from-orange-400 to-orange-600 rounded-3xl p-5 text-white shadow-lg shadow-orange-300">
           <div className="flex justify-between items-start mb-3">
             <div>
@@ -719,18 +888,58 @@ export default function App() {
         </div>
 
         <div className="grid grid-cols-2 gap-3">
-          <div className="bg-white p-3 rounded-2xl shadow-sm border border-gray-100 flex flex-col justify-between">
+          <button onClick={() => setActiveTab('kasbon')} className="bg-white p-3 rounded-2xl shadow-sm border border-gray-100 flex flex-col justify-between text-left hover:border-red-200 active:scale-[0.99] transition">
             <div className="flex items-center space-x-2 text-red-500 mb-1.5">
               <CreditCard size={16} /><span className="text-[9px] font-bold uppercase tracking-wider">Total Kasbon</span>
             </div>
             <p className="text-base font-bold text-gray-900">Rp {totalKasbon.toLocaleString('id-ID')}</p>
-          </div>
-          <div className="bg-white p-3 rounded-2xl shadow-sm border border-gray-100 flex flex-col justify-between">
+          </button>
+          <button onClick={() => setActiveTab('transactions')} className="bg-white p-3 rounded-2xl shadow-sm border border-gray-100 flex flex-col justify-between text-left hover:border-blue-200 active:scale-[0.99] transition">
             <div className="flex items-center space-x-2 text-blue-500 mb-1.5">
               <ShoppingCart size={16} /><span className="text-[9px] font-bold uppercase tracking-wider">Transaksi</span>
             </div>
             <p className="text-base font-bold text-gray-900">{filteredTransactions.length} Nota</p>
+          </button>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <div>
+              <h3 className="text-sm font-bold text-gray-800 flex items-center"><ShoppingCart size={16} className="mr-2 text-orange-500" /> Keranjang Belanja</h3>
+              <p className="text-xs text-gray-500 mt-0.5">{cartTotalQty} item siap checkout</p>
+            </div>
+            <button onClick={() => openScanner('sale')} className="bg-orange-100 text-orange-600 font-bold text-xs px-3 py-2 rounded-xl flex items-center hover:bg-orange-200 transition-colors"><Barcode size={14} className="mr-1.5" /> Scan Produk</button>
           </div>
+
+          {cart.length === 0 ? (
+            <div className="text-center py-5 rounded-2xl border border-dashed border-gray-200 bg-gray-50">
+              <p className="text-sm font-bold text-gray-700">Keranjang masih kosong</p>
+              <p className="text-xs text-gray-400 mt-1">Scan barcode produk untuk mulai transaksi.</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {cart.map(item => (
+                <div key={item.id} className="flex items-center justify-between gap-3 border-b border-gray-100 pb-3 last:border-b-0 last:pb-0">
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-gray-800 truncate">{item.nama}</p>
+                    <p className="text-xs text-gray-500">Rp {item.harga.toLocaleString('id-ID')} x{item.qty}</p>
+                    <p className="text-xs font-bold text-orange-600 mt-0.5">Rp {(item.harga * item.qty).toLocaleString('id-ID')}</p>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button onClick={() => updateCartQty(item.id, -1)} className="w-8 h-8 rounded-full bg-gray-100 text-gray-700 flex items-center justify-center"><Minus size={14} /></button>
+                    <span className="w-6 text-center text-sm font-bold text-gray-800">{item.qty}</span>
+                    <button onClick={() => updateCartQty(item.id, 1)} className="w-8 h-8 rounded-full bg-orange-100 text-orange-600 flex items-center justify-center"><Plus size={14} /></button>
+                    <button onClick={() => removeCartItem(item.id)} className="w-8 h-8 rounded-full bg-red-50 text-red-500 flex items-center justify-center"><Trash2 size={14} /></button>
+                  </div>
+                </div>
+              ))}
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-sm font-bold text-gray-700">Total</span>
+                <span className="text-lg font-extrabold text-gray-900">Rp {cartTotal.toLocaleString('id-ID')}</span>
+              </div>
+              <button onClick={checkoutCart} className="w-full bg-orange-500 text-white font-bold py-3 rounded-xl shadow-md shadow-orange-200 hover:bg-orange-600 transition-colors flex items-center justify-center"><Receipt size={18} className="mr-2" /> Checkout</button>
+            </div>
+          )}
         </div>
 
         {latestInsight && (
@@ -1194,11 +1403,7 @@ export default function App() {
         <button onClick={() => setActiveTab('inventory')} className={`flex flex-col items-center p-2 ${activeTab === 'inventory' ? 'text-orange-500' : 'text-gray-400'}`}><Package size={20} /><span className="text-[10px] font-semibold mt-1">Produk</span></button>
       </nav>
 
-      <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-end space-x-4">
-        <div className="flex flex-col items-center">
-          <button onClick={() => setIsScannerOpen(true)} className="w-12 h-12 bg-white text-gray-800 rounded-full flex items-center justify-center shadow-lg border border-gray-200" title="Scan barcode"><Barcode size={22} /></button>
-          <span className="mt-1 text-[10px] font-semibold text-gray-500">Scan</span>
-        </div>
+      <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-end">
         <div className="flex flex-col items-center -mb-1">
           <button onClick={() => setIsModalOpen(true)} className="w-16 h-16 bg-gradient-to-br from-[#431407] to-[#5a1c0a] rounded-full flex items-center justify-center shadow-xl shadow-orange-900/20 text-white border-4 border-[#f8f9fa]" title="Catat transaksi"><Mic size={26} className="text-orange-300" /></button>
           <span className="mt-1 text-[10px] font-bold text-orange-700">Catat</span>
@@ -1209,16 +1414,39 @@ export default function App() {
       {isScannerOpen && (
         <div className="absolute inset-0 bg-black/90 backdrop-blur-md z-[70] flex flex-col items-center justify-center p-4">
           <div className="w-full max-w-sm flex flex-col items-center">
-            <h3 className="text-white font-bold text-xl mb-2 flex items-center"><Camera className="mr-2" /> Scan Barcode</h3>
-            <p className="text-gray-400 text-sm text-center mb-8">Arahkan kamera ke kemasan produk (Indomie, Sabun) untuk jualan cepat.</p>
+            <h3 className="text-white font-bold text-xl mb-2 flex items-center"><Camera className="mr-2" /> {scannerMode === 'product' ? 'Scan Barcode Produk' : 'Scan Produk'}</h3>
+            <p className="text-gray-400 text-sm text-center mb-8">{scannerMode === 'product' ? 'Arahkan kamera ke barcode kemasan. Hasil scan hanya mengisi field barcode produk.' : 'Arahkan kamera ke barcode produk. Produk akan masuk ke keranjang.'}</p>
             <div className="w-full aspect-square bg-black rounded-3xl overflow-hidden border-2 border-orange-500 relative mb-6">
                <div id="reader" className="w-full min-h-[300px]"></div>
             </div>
             <div className="w-full flex space-x-2">
               <input type="text" value={manualBarcode} onChange={(e) => setManualBarcode(e.target.value)} placeholder="Atau ketik barcode manual..." className="flex-1 bg-white/10 border border-white/20 text-white px-4 py-3 rounded-xl focus:outline-none focus:border-orange-500 text-sm" />
-              <button onClick={() => handleScannedBarcode(manualBarcode)} className="bg-orange-500 text-white font-bold px-6 py-3 rounded-xl">Proses</button>
+              <button onClick={() => { if (manualBarcode.trim()) { setIsScannerOpen(false); handleScannedBarcode(manualBarcode); } }} className="bg-orange-500 text-white font-bold px-6 py-3 rounded-xl">Proses</button>
             </div>
             <button onClick={() => setIsScannerOpen(false)} className="mt-8 text-white/50 hover:text-white font-bold py-2 px-4 border border-white/20 rounded-full">Batal Scan</button>
+          </div>
+        </div>
+      )}
+
+      {showOnboarding && (
+        <div className="absolute inset-0 bg-black/55 backdrop-blur-sm z-[80] flex items-center justify-center p-5 animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl border border-orange-100">
+            <div className="flex items-start justify-between gap-3 mb-4">
+              <div>
+                <h3 className="font-bold text-gray-900 text-lg">Mulai pakai WarungPulse</h3>
+                <p className="text-sm text-gray-500 mt-1">Cukup siapkan ini dulu agar catatan warung rapi.</p>
+              </div>
+              <button onClick={() => setShowOnboarding(false)} className="text-gray-400 hover:text-gray-600 p-1 -mt-1 -mr-1 rounded-full" title="Tutup panduan"><X size={18} /></button>
+            </div>
+            <div className="space-y-3 text-sm text-gray-700">
+              <div className="flex items-center gap-3"><Package size={16} className="text-orange-500 shrink-0" /><span>Tambah produk dan harga jual.</span></div>
+              <div className="flex items-center gap-3"><Settings size={16} className="text-orange-500 shrink-0" /><span>Isi API Key Gemini di Pengaturan.</span></div>
+              <div className="flex items-center gap-3"><Mic size={16} className="text-orange-500 shrink-0" /><span>Tekan mikrofon untuk catat transaksi.</span></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3 mt-5">
+              <button onClick={() => { setActiveTab('settings'); setShowOnboarding(false); }} className="bg-orange-500 text-white font-bold py-3 rounded-xl text-sm shadow-md shadow-orange-200">Atur Sekarang</button>
+              <button onClick={() => setShowOnboarding(false)} className="bg-gray-100 text-gray-700 font-bold py-3 rounded-xl text-sm">Saya Mengerti</button>
+            </div>
           </div>
         </div>
       )}
@@ -1291,7 +1519,10 @@ export default function App() {
               </div>
               <div>
                 <label className="block text-xs font-bold text-gray-500 uppercase mb-1 flex items-center"><Barcode size={12} className="mr-1"/> Barcode</label>
-                <input type="text" value={productForm.barcode} onChange={(e) => setProductForm({...productForm, barcode: e.target.value})} className="w-full bg-gray-50 border rounded-xl p-3 focus:outline-none font-mono text-sm" />
+                <div className="flex gap-2">
+                  <input type="text" value={productForm.barcode} onChange={(e) => setProductForm({...productForm, barcode: e.target.value})} className="flex-1 min-w-0 bg-gray-50 border rounded-xl p-3 focus:outline-none font-mono text-sm" />
+                  <button type="button" onClick={() => openScanner('product')} className="bg-orange-100 text-orange-600 font-bold px-3 rounded-xl flex items-center"><Barcode size={16} /></button>
+                </div>
               </div>
               <button type="submit" className="w-full bg-orange-500 text-white font-bold py-3 rounded-xl mt-6 shadow-md hover:bg-orange-600">Simpan Produk</button>
             </form>
