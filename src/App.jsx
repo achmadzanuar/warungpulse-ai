@@ -1531,7 +1531,7 @@ export default function App() {
         </div>
       )}
 
-      <main className="flex-1 overflow-y-auto px-6 py-6 custom-scrollbar">
+      <main className="flex-1 overflow-y-auto px-6 pt-6 pb-32 custom-scrollbar">
         {activeTab === 'dashboard' && renderDashboardView()}
         {activeTab === 'transactions' && renderTransactionView()}
         {activeTab === 'kasbon' && renderPiutangView()}
@@ -1539,7 +1539,7 @@ export default function App() {
         {activeTab === 'settings' && renderSettingsView()}
       </main>
 
-      <nav className="bg-white border-t border-gray-100 px-4 py-4 flex justify-between items-center sticky bottom-0 z-20 pb-safe">
+      <nav className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md bg-white border-t border-gray-100 px-4 py-4 flex justify-between items-center z-40 pb-safe shadow-[0_-8px_24px_rgba(15,23,42,0.05)]">
         <button onClick={() => setActiveTab('dashboard')} className={`flex flex-col items-center p-2 ${activeTab === 'dashboard' ? 'text-orange-500' : 'text-gray-400'}`}><LayoutDashboard size={20} /><span className="text-[10px] font-semibold mt-1">Beranda</span></button>
         <button onClick={() => setActiveTab('kasbon')} className={`flex flex-col items-center p-2 relative ${activeTab === 'kasbon' ? 'text-orange-500' : 'text-gray-400'}`}><CreditCard size={20} /><span className="text-[10px] font-semibold mt-1">Kasbon</span>{piutang.length > 0 && <span className="absolute top-1 right-2 w-2 h-2 bg-red-500 rounded-full"></span>}</button>
         <div className="w-16"></div> 
@@ -1547,7 +1547,7 @@ export default function App() {
         <button onClick={() => setActiveTab('inventory')} className={`flex flex-col items-center p-2 ${activeTab === 'inventory' ? 'text-orange-500' : 'text-gray-400'}`}><Package size={20} /><span className="text-[10px] font-semibold mt-1">Produk</span></button>
       </nav>
 
-      <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-end">
+      <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 flex items-end">
         <div className="flex flex-col items-center -mb-1">
           <button onClick={() => setIsModalOpen(true)} className="w-16 h-16 bg-gradient-to-br from-[#431407] to-[#5a1c0a] rounded-full flex items-center justify-center shadow-xl shadow-orange-900/20 text-white border-4 border-[#f8f9fa]" title="Catat transaksi"><Mic size={26} className="text-orange-300" /></button>
           <span className="mt-1 text-[10px] font-bold text-orange-700">Catat</span>
