@@ -6,7 +6,7 @@ import {
   CreditCard, Share2, FileText, Receipt,
   Settings, Download, Upload, Store, Search, Camera, Barcode, 
   Calendar, FileSpreadsheet, HelpCircle, ChevronDown, ChevronUp, Image as ImageIcon,
-  Mail, ShieldCheck, Minus
+  Mail, ShieldCheck, Minus, Sparkles, Percent, MessageCircle, Loader2
 } from 'lucide-react';
 import { 
   AreaChart, Area, XAxis, Tooltip, ResponsiveContainer, CartesianGrid, YAxis
@@ -69,7 +69,10 @@ export default function App() {
   const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, title: '', message: '', action: null, cancelText: 'Batal', actionText: 'Lanjutkan', isDanger: false });
   const [selectedReceipt, setSelectedReceipt] = useState(null);
   const [activeQnA, setActiveQnA] = useState(null);
+  const [aiQuestion, setAiQuestion] = useState('');
+  const [aiAnswer, setAiAnswer] = useState('');
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState(null);
+  const [isInstallingApp, setIsInstallingApp] = useState(false);
   const [isStandaloneApp, setIsStandaloneApp] = useState(() => isRunningStandalone());
   const [showOnboarding, setShowOnboarding] = useState(() => !getLocalStorage('wp_onboarding_done', false));
   const [backupReminderInterval, setBackupReminderInterval] = useState(() => getLocalStorage('wp_backup_reminder_interval', 'weekly'));
@@ -94,6 +97,7 @@ export default function App() {
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
   const [productForm, setProductForm] = useState({ name: '', stock: '', price: '', cost: '', category: 'Lainnya', barcode: '' });
+  const [targetMargin, setTargetMargin] = useState(20);
   const [newCategoryName, setNewCategoryName] = useState('');
 
   const recognitionRef = useRef(null);
@@ -133,6 +137,7 @@ export default function App() {
 
     const handleAppInstalled = () => {
       setDeferredInstallPrompt(null);
+      setIsInstallingApp(false);
       setIsStandaloneApp(true);
     };
 
@@ -253,12 +258,19 @@ export default function App() {
   const installApp = async () => {
     if (!deferredInstallPrompt) return;
 
-    deferredInstallPrompt.prompt();
-    const choiceResult = await deferredInstallPrompt.userChoice;
-    if (choiceResult.outcome === 'accepted') {
-      setIsStandaloneApp(true);
+    setIsInstallingApp(true);
+    try {
+      deferredInstallPrompt.prompt();
+      const choiceResult = await deferredInstallPrompt.userChoice;
+      if (choiceResult.outcome === 'accepted') {
+        setIsStandaloneApp(true);
+      }
+      setDeferredInstallPrompt(null);
+    } catch (error) {
+      console.warn('Install prompt error', error);
+    } finally {
+      setIsInstallingApp(false);
     }
-    setDeferredInstallPrompt(null);
   };
 
   const filteredTransactions = useMemo(() => {
@@ -286,6 +298,85 @@ export default function App() {
   const totalKasbon = piutang.reduce((acc, curr) => acc + curr.total_transaction, 0);
   const cartTotal = cart.reduce((sum, item) => sum + (item.harga * item.qty), 0);
   const cartTotalQty = cart.reduce((sum, item) => sum + item.qty, 0);
+  const businessAi = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+    const weekAgo = new Date(today);
+    weekAgo.setDate(today.getDate() - 7);
+
+    const salesTx = transactions.filter(tx => tx.type !== 'pengeluaran');
+    const byDateTotal = (targetDate) => salesTx.reduce((sum, tx) => {
+      const txDate = parseIndoDate(tx.date);
+      txDate.setHours(0, 0, 0, 0);
+      return txDate.getTime() === targetDate.getTime() ? sum + (tx.total_transaction || 0) : sum;
+    }, 0);
+    const todaySales = byDateTotal(today);
+    const yesterdaySales = byDateTotal(yesterday);
+    const todayProfit = transactions.reduce((sum, tx) => {
+      const txDate = parseIndoDate(tx.date);
+      txDate.setHours(0, 0, 0, 0);
+      return txDate.getTime() === today.getTime() ? sum + (tx.total_profit || 0) : sum;
+    }, 0);
+
+    const soldSummary = {};
+    salesTx.forEach(tx => {
+      const txDate = parseIndoDate(tx.date);
+      txDate.setHours(0, 0, 0, 0);
+      const isThisWeek = txDate >= weekAgo && txDate <= today;
+      tx.items.forEach(item => {
+        if (!soldSummary[item.name]) soldSummary[item.name] = { name: item.name, qty: 0, total: 0, weekQty: 0 };
+        soldSummary[item.name].qty += item.qty || 0;
+        soldSummary[item.name].total += item.subtotal || 0;
+        if (isThisWeek) soldSummary[item.name].weekQty += item.qty || 0;
+      });
+    });
+
+    const soldItems = Object.values(soldSummary).sort((a, b) => b.weekQty - a.weekQty || b.qty - a.qty);
+    const topProduct = soldItems.find(item => item.weekQty > 0) || soldItems[0];
+    const slowProduct = inventory.find(product => !soldSummary[product.name]?.weekQty);
+    const restockCandidate = inventory
+      .map(product => {
+        const weeklySold = soldSummary[product.name]?.weekQty || 0;
+        const avgDaily = weeklySold / 7;
+        const daysLeft = avgDaily > 0 ? Math.ceil(product.stock / avgDaily) : null;
+        const score = (daysLeft || 99) + (product.stock < 10 ? -10 : 0);
+        return { ...product, weeklySold, avgDaily, daysLeft, score };
+      })
+      .filter(product => product.stock < 10 || product.daysLeft !== null)
+      .sort((a, b) => a.score - b.score)[0];
+
+    const changePercent = yesterdaySales > 0 ? Math.round(((todaySales - yesterdaySales) / yesterdaySales) * 100) : null;
+    const dailySummary = todaySales > 0
+      ? `Hari ini omzet Rp ${todaySales.toLocaleString('id-ID')}${changePercent !== null ? ` (${changePercent >= 0 ? 'naik' : 'turun'} ${Math.abs(changePercent)}% dari kemarin)` : ''}. Laba Rp ${todayProfit.toLocaleString('id-ID')}.`
+      : 'Belum ada transaksi hari ini. Mulai scan atau catat penjualan pertama.';
+    const restockSummary = restockCandidate
+      ? `${restockCandidate.name} sisa ${restockCandidate.stock}${restockCandidate.daysLeft ? `, estimasi habis ${restockCandidate.daysLeft} hari lagi` : ''}.`
+      : 'Stok masih aman berdasarkan data penjualan terakhir.';
+    const productSummary = topProduct
+      ? `Produk laris: ${topProduct.name} (${topProduct.weekQty || topProduct.qty} terjual).${slowProduct ? ` Produk sepi: ${slowProduct.name}.` : ''}`
+      : 'Belum cukup data untuk membaca produk laris dan sepi.';
+
+    return { dailySummary, restockSummary, productSummary, topProduct, slowProduct, restockCandidate, todaySales, todayProfit };
+  }, [transactions, inventory]);
+  const priceSuggestion = useMemo(() => {
+    const cost = Number(productForm.cost) || 0;
+    const price = Number(productForm.price) || 0;
+    const marginTarget = Math.min(Math.max(Number(targetMargin) || 20, 1), 90);
+    const recommendedPrice = cost > 0 ? Math.ceil((cost / (1 - (marginTarget / 100))) / 100) * 100 : 0;
+    const currentMargin = price > 0 ? ((price - cost) / price) * 100 : 0;
+
+    return {
+      cost,
+      price,
+      currentMargin,
+      recommendedPrice,
+      expectedProfit: Math.max(0, recommendedPrice - cost),
+      targetMargin: marginTarget,
+      isBelowCost: price > 0 && cost > price,
+    };
+  }, [productForm.cost, productForm.price, targetMargin]);
   const backupReminderDays = backupReminderInterval === 'monthly' ? 30 : 7;
   const isBackupReminderOn = backupReminderInterval !== 'off';
   const lastBackupTime = lastBackupAt ? new Date(lastBackupAt).getTime() : 0;
@@ -308,6 +399,40 @@ export default function App() {
     setManualBarcode('');
     setIsScannerOpen(true);
   }, []);
+
+  const answerBusinessQuestion = () => {
+    const question = aiQuestion.trim().toLowerCase();
+    if (!question) return;
+
+    let answer = 'Saya bisa bantu jawab omzet, laba, produk laris, kasbon terbesar, stok, dan rekomendasi restock dari data lokal warung.';
+
+    if (question.includes('untung') || question.includes('laba')) {
+      answer = `Laba hari ini Rp ${businessAi.todayProfit.toLocaleString('id-ID')}. Untuk filter laporan saat ini, laba bersih Rp ${totalProfit.toLocaleString('id-ID')}.`;
+    } else if (question.includes('omzet') || question.includes('pendapatan')) {
+      answer = `Omzet hari ini Rp ${businessAi.todaySales.toLocaleString('id-ID')}. Omzet pada filter laporan saat ini Rp ${totalOmzet.toLocaleString('id-ID')}.`;
+    } else if (question.includes('laris') || question.includes('paling laku')) {
+      answer = businessAi.topProduct
+        ? `Produk paling laku: ${businessAi.topProduct.name}, terjual ${businessAi.topProduct.weekQty || businessAi.topProduct.qty} pcs.`
+        : 'Belum ada data penjualan produk untuk menentukan produk paling laku.';
+    } else if (question.includes('sepi') || question.includes('lambat')) {
+      answer = businessAi.slowProduct
+        ? `Produk yang belum bergerak minggu ini: ${businessAi.slowProduct.name}. Cek stok atau promo kecil bila perlu.`
+        : 'Semua produk utama masih punya pergerakan atau data belum cukup.';
+    } else if (question.includes('kasbon') || question.includes('utang')) {
+      const biggestDebt = [...piutang].sort((a, b) => (b.total_transaction || 0) - (a.total_transaction || 0))[0];
+      answer = biggestDebt
+        ? `Kasbon terbesar: ${biggestDebt.customer_name}, Rp ${biggestDebt.total_transaction.toLocaleString('id-ID')}. Total kasbon Rp ${totalKasbon.toLocaleString('id-ID')}.`
+        : 'Belum ada kasbon aktif.';
+    } else if (question.includes('stok') || question.includes('restock')) {
+      answer = businessAi.restockCandidate
+        ? `Rekomendasi restock: ${businessAi.restockCandidate.name}, stok sisa ${businessAi.restockCandidate.stock}${businessAi.restockCandidate.daysLeft ? ` dan estimasi habis ${businessAi.restockCandidate.daysLeft} hari lagi` : ''}.`
+        : 'Belum ada produk yang mendesak untuk restock.';
+    } else if (question.includes('transaksi') || question.includes('nota')) {
+      answer = `Ada ${filteredTransactions.length} nota pada filter laporan saat ini. Omzetnya Rp ${totalOmzet.toLocaleString('id-ID')}.`;
+    }
+
+    setAiAnswer(answer);
+  };
 
   const addProductToCart = useCallback((product) => {
     if (!product) return;
@@ -861,7 +986,6 @@ export default function App() {
     const chartData = [...filteredTransactions].reverse().slice(-7).map((tx, index) => ({ name: `Tx ${index + 1}`, omzet: tx.type !== 'pengeluaran' ? tx.total_transaction : 0 }));
     const lowStockItems = inventory.filter(item => item.stock < 10);
     const lowStockPreview = lowStockItems.slice(0, 3);
-    const latestInsight = aiInsights[0];
 
     return (
       <div className="space-y-4 pb-24 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -942,21 +1066,41 @@ export default function App() {
           )}
         </div>
 
-        {latestInsight && (
-          <div>
-            <h3 className="text-sm font-bold text-gray-800 mb-2 flex items-center"><Bot size={15} className="mr-2 text-orange-500" /> AI Insights</h3>
-            <div className="bg-orange-50/80 border border-orange-100 rounded-2xl p-3">
-              <div className="space-y-2">
-                {aiInsights.slice(0, 1).map((insight, idx) => (
-                  <div key={idx} className="flex items-start space-x-2.5">
-                    <span className="text-orange-500 text-lg leading-none mt-0.5">-</span>
-                    <p className="text-xs text-gray-700 italic font-medium leading-relaxed line-clamp-2">"{insight}"</p>
-                  </div>
-                ))}
-              </div>
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <div>
+              <h3 className="text-sm font-bold text-gray-800 flex items-center"><Bot size={16} className="mr-2 text-orange-500" /> AI Bisnis</h3>
+              <p className="text-xs text-gray-500 mt-0.5">Ringkasan otomatis dari data lokal.</p>
             </div>
+            <Sparkles size={18} className="text-orange-400 shrink-0" />
           </div>
-        )}
+          <div className="space-y-2 mb-3">
+            {[businessAi.dailySummary, businessAi.restockSummary, businessAi.productSummary].map((insight, idx) => (
+              <div key={idx} className="bg-orange-50/70 border border-orange-100 rounded-xl px-3 py-2">
+                <p className="text-xs text-gray-700 leading-relaxed">{insight}</p>
+              </div>
+            ))}
+          </div>
+          <div className="bg-gray-50 border border-gray-100 rounded-2xl p-2">
+            <div className="flex items-center gap-2">
+              <MessageCircle size={16} className="text-gray-400 shrink-0 ml-1" />
+              <input
+                type="text"
+                value={aiQuestion}
+                onChange={(e) => setAiQuestion(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') answerBusinessQuestion(); }}
+                placeholder="Tanya: untung, produk laris, kasbon..."
+                className="flex-1 min-w-0 bg-transparent text-xs text-gray-800 placeholder:text-gray-400 focus:outline-none py-2"
+              />
+              <button onClick={answerBusinessQuestion} className="bg-orange-500 text-white rounded-xl px-3 py-2 text-xs font-bold flex items-center"><Send size={13} /></button>
+            </div>
+            {aiAnswer && (
+              <div className="mt-2 bg-white rounded-xl border border-gray-100 p-3">
+                <p className="text-xs text-gray-700 leading-relaxed">{aiAnswer}</p>
+              </div>
+            )}
+          </div>
+        </div>
 
         {chartData.length > 0 && (
         <div>
@@ -1365,9 +1509,9 @@ export default function App() {
           </div>
           <div className="flex items-center gap-2 shrink-0">
             {deferredInstallPrompt && !isStandaloneApp && (
-              <button onClick={installApp} className="h-10 bg-orange-500 text-white rounded-full flex items-center justify-center gap-1.5 px-3 text-xs font-bold shadow-md shadow-orange-200 hover:bg-orange-600 transition-colors">
-                <Download size={16} />
-                <span>Install</span>
+              <button onClick={installApp} disabled={isInstallingApp} className="h-10 bg-orange-500 disabled:bg-orange-300 text-white rounded-full flex items-center justify-center gap-1.5 px-3 text-xs font-bold shadow-md shadow-orange-200 hover:bg-orange-600 disabled:hover:bg-orange-300 transition-colors">
+                {isInstallingApp ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+                <span>{isInstallingApp ? 'Memproses...' : 'Install'}</span>
               </button>
             )}
             <button onClick={() => setActiveTab('settings')} className="w-10 h-10 bg-gray-50 rounded-full flex items-center justify-center text-gray-600 border border-gray-200 hover:bg-gray-100 transition-colors"><Settings size={20} /></button>
@@ -1507,6 +1651,52 @@ export default function App() {
               <div className="grid grid-cols-2 gap-4">
                 <div><label className="block text-xs font-bold text-gray-500 uppercase mb-1">Modal</label><input type="number" required min="0" value={productForm.cost} onChange={(e) => setProductForm({...productForm, cost: e.target.value})} className="w-full bg-gray-50 border rounded-xl p-3 focus:outline-none" /></div>
                 <div><label className="block text-xs font-bold text-gray-500 uppercase mb-1">Jual</label><input type="number" required min="0" value={productForm.price} onChange={(e) => setProductForm({...productForm, price: e.target.value})} className="w-full bg-gray-50 border rounded-xl p-3 focus:outline-none" /></div>
+              </div>
+              <div className="bg-orange-50 border border-orange-100 rounded-2xl p-3">
+                <div className="flex items-start justify-between gap-3 mb-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="w-8 h-8 rounded-xl bg-white text-orange-500 flex items-center justify-center shrink-0"><Sparkles size={16} /></div>
+                    <div className="min-w-0">
+                      <h4 className="text-sm font-bold text-gray-900">AI Saran Harga</h4>
+                      <p className="text-[11px] text-gray-500">Hitung harga jual dari modal dan target margin.</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center bg-white rounded-xl px-2 py-1 border border-orange-100">
+                    <Percent size={13} className="text-orange-500 mr-1" />
+                    <input type="number" min="1" max="90" value={targetMargin} onChange={(e) => setTargetMargin(e.target.value)} className="w-10 bg-transparent text-xs font-bold text-gray-800 focus:outline-none" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-2 mb-3">
+                  {[15, 20, 25].map(margin => (
+                    <button key={margin} type="button" onClick={() => setTargetMargin(margin)} className={`py-2 rounded-xl text-xs font-bold transition-colors ${Number(targetMargin) === margin ? 'bg-orange-500 text-white shadow-sm shadow-orange-200' : 'bg-white text-gray-600 border border-orange-100'}`}>{margin}%</button>
+                  ))}
+                </div>
+                {priceSuggestion.cost > 0 ? (
+                  <div className="bg-white rounded-2xl p-3 border border-orange-100">
+                    <div className="flex items-end justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] text-gray-500">Rekomendasi jual</p>
+                        <p className="text-xl font-extrabold text-orange-600">Rp {priceSuggestion.recommendedPrice.toLocaleString('id-ID')}</p>
+                      </div>
+                      <button type="button" onClick={() => setProductForm({...productForm, price: priceSuggestion.recommendedPrice})} className="bg-orange-500 text-white text-xs font-bold px-3 py-2 rounded-xl">Pakai Harga</button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 mt-3 text-xs">
+                      <div className="bg-gray-50 rounded-xl p-2">
+                        <p className="text-gray-400">Margin sekarang</p>
+                        <p className={`font-bold ${priceSuggestion.isBelowCost ? 'text-red-500' : 'text-gray-800'}`}>{priceSuggestion.price > 0 ? `${priceSuggestion.currentMargin.toFixed(1)}%` : '-'}</p>
+                      </div>
+                      <div className="bg-gray-50 rounded-xl p-2">
+                        <p className="text-gray-400">Estimasi untung</p>
+                        <p className="font-bold text-gray-800">Rp {priceSuggestion.expectedProfit.toLocaleString('id-ID')}</p>
+                      </div>
+                    </div>
+                    {priceSuggestion.isBelowCost && <p className="text-xs text-red-500 font-semibold mt-2">Harga jual masih di bawah modal.</p>}
+                  </div>
+                ) : (
+                  <div className="bg-white rounded-2xl p-3 border border-dashed border-orange-200 text-center">
+                    <p className="text-xs text-gray-500">Isi modal produk untuk melihat saran harga jual.</p>
+                  </div>
+                )}
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div><label className="block text-xs font-bold text-gray-500 uppercase mb-1">Stok</label><input type="number" required min="0" value={productForm.stock} onChange={(e) => setProductForm({...productForm, stock: e.target.value})} className="w-full bg-gray-50 border rounded-xl p-3 focus:outline-none" /></div>
